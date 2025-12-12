@@ -1,6 +1,7 @@
 """
 실적발표 크롤러 (selenium-stealth 기반)
 """
+import os
 import re
 import time
 import logging
@@ -21,7 +22,7 @@ from selenium_stealth import stealth
 from webdriver_manager.chrome import ChromeDriverManager
 
 from config import (
-    EARNINGS_URL, EARNINGS_CSV, BASE_URL,
+    EARNINGS_URL, EARNINGS_CSV, BASE_URL, DATA_DIR,
     REQUEST_DELAY, MAX_RETRIES, CSV_COLUMNS,
     HEADLESS, PAGE_LOAD_TIMEOUT, IMPLICIT_WAIT
 )
@@ -356,6 +357,9 @@ class EarningsCrawler:
             return False
 
         try:
+            # 디렉토리가 없으면 생성
+            os.makedirs(DATA_DIR, exist_ok=True)
+
             df = pd.DataFrame(items, columns=CSV_COLUMNS)
             df.to_csv(EARNINGS_CSV, index=False, encoding='utf-8-sig')
             logger.info(f"{EARNINGS_CSV} 저장 완료 ({len(items)}개 항목)")
