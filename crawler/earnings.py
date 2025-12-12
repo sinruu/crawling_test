@@ -345,6 +345,11 @@ class EarningsCrawler:
         try:
             logger.info(f"페이지 {page_num}로 이동 중...")
 
+            # 다른 페이지 방문 후 목록 페이지로 돌아오기
+            logger.debug(f"목록 페이지로 복귀: {self.url}")
+            self.driver.get(self.url)
+            time.sleep(REQUEST_DELAY * 2)
+
             # 페이지 번호에 해당하는 링크 찾기 및 클릭
             page_link = self.driver.find_element(By.CSS_SELECTOR, f'a[data-page="{page_num}"]')
             page_link.click()
