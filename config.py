@@ -4,9 +4,9 @@
 import os
 
 # 기본 URL 설정
-BASE_URL = "https://woorifg.com/kor/investor/ir"
-EARNINGS_URL = f"{BASE_URL}/earnings/list.do"
-FACTBOOK_URL = f"{BASE_URL}/fact-book/list.do"
+BASE_URL = "https://www.woorifg.com/kor/main/index.do"
+EARNINGS_URL = "https://www.woorifg.com/kor/investor/ir/earnings-announcement/list.do"
+FACTBOOK_URL = "https://www.woorifg.com/kor/investor/ir/fact-book/list.do"
 
 # 디렉토리 설정
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
