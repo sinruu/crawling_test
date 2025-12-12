@@ -219,7 +219,8 @@ class FactBookCrawler:
         """
         try:
             # 상대 URL을 절대 URL로 변환
-            full_url = urljoin(BASE_URL, view_url)
+            # list.do 페이지의 URL을 기준으로 상대 경로 해석
+            full_url = urljoin(self.url, view_url)
             logger.debug(f"View 페이지 방문: {full_url}")
 
             # 페이지 로드
