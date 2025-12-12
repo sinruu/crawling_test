@@ -1,80 +1,83 @@
 """
-Fact Book 크롤러
+Fact Book 크롤러 (Selenium 기반)
 """
 import re
-import ssl
 import time
 import logging
 import pandas as pd
-import requests
-import urllib3
-from requests.adapters import HTTPAdapter
-from urllib3.util.ssl_ import create_urllib3_context
 from bs4 import BeautifulSoup
 from datetime import datetime
 from typing import List, Dict, Optional
 from urllib.parse import urljoin
 
-# SSL 인증서 검증 경고 비활성화
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, WebDriverException
+from webdriver_manager.chrome import ChromeDriverManager
 
 from config import (
-    FACTBOOK_URL, FACTBOOK_CSV, HEADERS,
-    REQUEST_DELAY, MAX_RETRIES, TIMEOUT, CSV_COLUMNS, BASE_URL
+    FACTBOOK_URL, FACTBOOK_CSV, BASE_URL,
+    REQUEST_DELAY, MAX_RETRIES, CSV_COLUMNS,
+    HEADLESS, PAGE_LOAD_TIMEOUT, IMPLICIT_WAIT
 )
 
 logger = logging.getLogger(__name__)
 
 
-class SSLAdapter(HTTPAdapter):
-    """Legacy SSL renegotiation을 지원하는 커스텀 어댑터"""
-
-    def init_poolmanager(self, *args, **kwargs):
-        ctx = create_urllib3_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        # Legacy server 연결 허용
-        ctx.options |= 0x4  # OP_LEGACY_SERVER_CONNECT
-        kwargs['ssl_context'] = ctx
-        return super().init_poolmanager(*args, **kwargs)
-
-
 class FactBookCrawler:
-    """Fact Book 크롤러 클래스"""
+    """Fact Book 크롤러 클래스 (Selenium 기반)"""
 
     def __init__(self):
         self.url = FACTBOOK_URL
-        self.headers = HEADERS.copy()
-        # SSL 어댑터가 적용된 세션 생성
-        self.session = requests.Session()
-        self.session.mount('https://', SSLAdapter())
-        # 메인 페이지를 먼저 방문하여 쿠키 획득
-        self._init_session()
+        self.driver = None
 
-    def _init_session(self):
+    def _setup_driver(self):
         """
-        세션 초기화: 메인 페이지를 방문하여 쿠키를 획득하고 실제 사용자처럼 행동
+        Chrome WebDriver 설정 및 생성
         """
         try:
-            # 메인 페이지 방문
-            main_url = "https://woorifg.com"
-            logger.debug(f"메인 페이지 방문: {main_url}")
-            response = self.session.get(
-                main_url,
-                headers=self.headers,
-                timeout=TIMEOUT,
-                verify=False,
-                allow_redirects=True
-            )
-            # 약간의 딜레이 (사람처럼 행동)
-            time.sleep(REQUEST_DELAY)
+            chrome_options = Options()
 
-            # Referer 헤더 추가
-            self.headers['Referer'] = main_url
-            logger.debug("세션 초기화 완료")
+            # 헤드리스 모드 설정
+            if HEADLESS:
+                chrome_options.add_argument('--headless=new')
+
+            # 봇 탐지 우회를 위한 옵션들
+            chrome_options.add_argument('--disable-blink-features=AutomationControlled')
+            chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+            chrome_options.add_experimental_option('useAutomationExtension', False)
+
+            # 추가 옵션
+            chrome_options.add_argument('--no-sandbox')
+            chrome_options.add_argument('--disable-dev-shm-usage')
+            chrome_options.add_argument('--disable-gpu')
+            chrome_options.add_argument('--window-size=1920,1080')
+            chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36')
+
+            # SSL 인증서 오류 무시
+            chrome_options.add_argument('--ignore-certificate-errors')
+            chrome_options.add_argument('--allow-insecure-localhost')
+
+            # WebDriver 생성
+            service = Service(ChromeDriverManager().install())
+            self.driver = webdriver.Chrome(service=service, options=chrome_options)
+
+            # 타임아웃 설정
+            self.driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
+            self.driver.implicitly_wait(IMPLICIT_WAIT)
+
+            # WebDriver 감지 우회
+            self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+
+            logger.info("Chrome WebDriver 초기화 완료")
 
         except Exception as e:
-            logger.warning(f"세션 초기화 중 오류 (무시): {str(e)}")
+            logger.error(f"WebDriver 초기화 실패: {str(e)}")
+            raise
 
     def _parse_quarter(self, title: str) -> Optional[str]:
         """
@@ -100,12 +103,11 @@ class FactBookCrawler:
                 year, quarter = match.groups()
                 return f"{year}_{quarter}Q_FactBook.pdf"
 
-        # 분기 정보를 찾을 수 없는 경우 날짜 기반으로 생성
+        # 분기 정보를 찾을 수 없는 경우 제목 기반으로 생성
         logger.warning(f"분기 정보 추출 실패, 제목 기반 파일명 생성: {title}")
-        # 안전한 파일명 생성 (특수문자 제거)
         safe_title = re.sub(r'[^\w\s-]', '', title).strip()
         safe_title = re.sub(r'[-\s]+', '_', safe_title)
-        return f"{safe_title[:50]}.pdf"  # 파일명 길이 제한
+        return f"{safe_title[:50]}.pdf"
 
     def _parse_date(self, date_str: str) -> str:
         """
@@ -141,7 +143,7 @@ class FactBookCrawler:
 
     def _fetch_page(self, url: str) -> Optional[BeautifulSoup]:
         """
-        웹페이지를 가져와서 BeautifulSoup 객체로 반환
+        Selenium을 사용하여 웹페이지를 가져와서 BeautifulSoup 객체로 반환
 
         Args:
             url: 크롤링할 URL
@@ -157,29 +159,42 @@ class FactBookCrawler:
                 if attempt > 1:
                     time.sleep(REQUEST_DELAY * attempt)
 
-                response = self.session.get(
-                    url,
-                    headers=self.headers,
-                    timeout=TIMEOUT,
-                    verify=False,
-                    allow_redirects=True
-                )
-                response.raise_for_status()
-                return BeautifulSoup(response.text, 'lxml')
+                # 페이지 로드
+                self.driver.get(url)
 
-            except requests.exceptions.RequestException as e:
-                logger.warning(f"페이지 요청 실패 ({attempt}/{MAX_RETRIES}): {str(e)}")
+                # 페이지 로딩 대기 (body 태그가 로드될 때까지)
+                WebDriverWait(self.driver, PAGE_LOAD_TIMEOUT).until(
+                    EC.presence_of_element_located((By.TAG_NAME, "body"))
+                )
+
+                # 추가 로딩 시간 (동적 콘텐츠를 위해)
+                time.sleep(REQUEST_DELAY * 2)
+
+                # 페이지 소스 가져오기
+                page_source = self.driver.page_source
+                return BeautifulSoup(page_source, 'lxml')
+
+            except TimeoutException:
+                logger.warning(f"페이지 로드 타임아웃 ({attempt}/{MAX_RETRIES}): {url}")
                 if attempt == MAX_RETRIES:
                     logger.error(f"페이지 요청 최종 실패: {url}")
                     return None
+
+            except WebDriverException as e:
+                logger.warning(f"WebDriver 오류 ({attempt}/{MAX_RETRIES}): {str(e)}")
+                if attempt == MAX_RETRIES:
+                    logger.error(f"페이지 요청 최종 실패: {url}")
+                    return None
+
+            except Exception as e:
+                logger.error(f"예상치 못한 오류: {str(e)}")
+                return None
 
         return None
 
     def _parse_items(self, soup: BeautifulSoup) -> List[Dict]:
         """
         페이지에서 게시글 정보를 파싱
-
-        주의: 실제 웹사이트 HTML 구조에 맞게 수정 필요
 
         Args:
             soup: BeautifulSoup 객체
@@ -190,7 +205,6 @@ class FactBookCrawler:
         items = []
 
         # 일반적인 IR 페이지 구조를 가정한 파싱
-        # 실제 구조에 맞게 셀렉터 수정 필요
         # 예시 1: 테이블 구조
         table = soup.find('table', {'class': 'board-list'}) or soup.find('table')
         if table:
@@ -201,7 +215,7 @@ class FactBookCrawler:
                     if len(cols) < 2:
                         continue
 
-                    # 제목과 링크 추출 (일반적으로 제목 컬럼에 있음)
+                    # 제목과 링크 추출
                     title_col = cols[1] if len(cols) > 1 else cols[0]
                     link_tag = title_col.find('a')
 
@@ -215,7 +229,7 @@ class FactBookCrawler:
                     if pdf_url and not pdf_url.startswith('http'):
                         pdf_url = urljoin(self.url, pdf_url)
 
-                    # 날짜 추출 (보통 마지막 컬럼)
+                    # 날짜 추출
                     date_col = cols[-1]
                     date_str = date_col.get_text(strip=True)
                     date = self._parse_date(date_str)
@@ -235,7 +249,7 @@ class FactBookCrawler:
                     logger.warning(f"항목 파싱 중 오류: {str(e)}")
                     continue
 
-        # 예시 2: 리스트(ul/li) 구조
+        # 예시 2: 리스트 구조
         else:
             items_list = soup.find('ul', {'class': 'list'}) or soup.find('div', {'class': 'list'})
             if items_list:
@@ -251,7 +265,7 @@ class FactBookCrawler:
                         if pdf_url and not pdf_url.startswith('http'):
                             pdf_url = urljoin(self.url, pdf_url)
 
-                        # 날짜는 다른 태그에서 추출
+                        # 날짜 추출
                         date_tag = item.find('span', {'class': 'date'}) or item.find('time')
                         date_str = date_tag.get_text(strip=True) if date_tag else ''
                         date = self._parse_date(date_str) if date_str else ''
@@ -281,27 +295,37 @@ class FactBookCrawler:
         """
         logger.info("Fact Book 크롤링 시작")
 
-        soup = self._fetch_page(self.url)
-        if not soup:
-            logger.error("페이지 로드 실패")
-            return []
+        try:
+            # WebDriver 초기화
+            self._setup_driver()
 
-        items = self._parse_items(soup)
+            # 페이지 로드
+            soup = self._fetch_page(self.url)
+            if not soup:
+                logger.error("페이지 로드 실패")
+                return []
 
-        if not items:
-            logger.warning("수집된 항목이 없습니다. HTML 구조를 확인해주세요.")
-            logger.info("HTML 구조 디버깅 정보:")
-            logger.info(f"페이지 타이틀: {soup.title.string if soup.title else 'N/A'}")
-            # 테이블 확인
-            tables = soup.find_all('table')
-            logger.info(f"테이블 개수: {len(tables)}")
-            # 리스트 확인
-            lists = soup.find_all(['ul', 'ol'])
-            logger.info(f"리스트 개수: {len(lists)}")
-        else:
-            logger.info(f"{len(items)}개 항목 발견")
+            # 항목 파싱
+            items = self._parse_items(soup)
 
-        return items
+            if not items:
+                logger.warning("수집된 항목이 없습니다. HTML 구조를 확인해주세요.")
+                logger.info("HTML 구조 디버깅 정보:")
+                logger.info(f"페이지 타이틀: {soup.title.string if soup.title else 'N/A'}")
+                tables = soup.find_all('table')
+                logger.info(f"테이블 개수: {len(tables)}")
+                lists = soup.find_all(['ul', 'ol'])
+                logger.info(f"리스트 개수: {len(lists)}")
+            else:
+                logger.info(f"{len(items)}개 항목 발견")
+
+            return items
+
+        finally:
+            # WebDriver 종료
+            if self.driver:
+                self.driver.quit()
+                logger.debug("WebDriver 종료")
 
     def save_to_csv(self, items: List[Dict]) -> bool:
         """
