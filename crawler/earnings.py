@@ -5,10 +5,14 @@ import re
 import logging
 import pandas as pd
 import requests
+import urllib3
 from bs4 import BeautifulSoup
 from datetime import datetime
 from typing import List, Dict, Optional
 from urllib.parse import urljoin
+
+# SSL 인증서 검증 경고 비활성화
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from config import (
     EARNINGS_URL, EARNINGS_CSV, HEADERS,
@@ -101,7 +105,7 @@ class EarningsCrawler:
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 logger.debug(f"페이지 요청 시도 ({attempt}/{MAX_RETRIES}): {url}")
-                response = requests.get(url, headers=self.headers, timeout=TIMEOUT)
+                response = requests.get(url, headers=self.headers, timeout=TIMEOUT, verify=False)
                 response.raise_for_status()
                 return BeautifulSoup(response.text, 'lxml')
 

@@ -5,7 +5,11 @@ import os
 import time
 import logging
 import requests
+import urllib3
 from typing import Optional
+
+# SSL 인증서 검증 경고 비활성화
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from config import HEADERS, MAX_RETRIES, TIMEOUT, REQUEST_DELAY
 
@@ -74,7 +78,8 @@ class PDFDownloader:
                     url,
                     headers=HEADERS,
                     timeout=TIMEOUT,
-                    stream=True
+                    stream=True,
+                    verify=False
                 )
                 response.raise_for_status()
 
