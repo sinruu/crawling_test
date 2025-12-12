@@ -3,6 +3,7 @@
 """
 import re
 import ssl
+import time
 import logging
 import pandas as pd
 import requests
@@ -19,7 +20,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from config import (
     EARNINGS_URL, EARNINGS_CSV, HEADERS,
-    REQUEST_DELAY, MAX_RETRIES, TIMEOUT, CSV_COLUMNS
+    REQUEST_DELAY, MAX_RETRIES, TIMEOUT, CSV_COLUMNS, BASE_URL
 )
 
 logger = logging.getLogger(__name__)
@@ -43,10 +44,37 @@ class EarningsCrawler:
 
     def __init__(self):
         self.url = EARNINGS_URL
-        self.headers = HEADERS
+        self.headers = HEADERS.copy()
         # SSL 어댑터가 적용된 세션 생성
         self.session = requests.Session()
         self.session.mount('https://', SSLAdapter())
+        # 메인 페이지를 먼저 방문하여 쿠키 획득
+        self._init_session()
+
+    def _init_session(self):
+        """
+        세션 초기화: 메인 페이지를 방문하여 쿠키를 획득하고 실제 사용자처럼 행동
+        """
+        try:
+            # 메인 페이지 방문
+            main_url = "https://woorifg.com"
+            logger.debug(f"메인 페이지 방문: {main_url}")
+            response = self.session.get(
+                main_url,
+                headers=self.headers,
+                timeout=TIMEOUT,
+                verify=False,
+                allow_redirects=True
+            )
+            # 약간의 딜레이 (사람처럼 행동)
+            time.sleep(REQUEST_DELAY)
+
+            # Referer 헤더 추가
+            self.headers['Referer'] = main_url
+            logger.debug("세션 초기화 완료")
+
+        except Exception as e:
+            logger.warning(f"세션 초기화 중 오류 (무시): {str(e)}")
 
     def _parse_quarter(self, title: str) -> Optional[str]:
         """
@@ -124,7 +152,18 @@ class EarningsCrawler:
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 logger.debug(f"페이지 요청 시도 ({attempt}/{MAX_RETRIES}): {url}")
-                response = self.session.get(url, headers=self.headers, timeout=TIMEOUT, verify=False)
+
+                # 재시도 시 딜레이
+                if attempt > 1:
+                    time.sleep(REQUEST_DELAY * attempt)
+
+                response = self.session.get(
+                    url,
+                    headers=self.headers,
+                    timeout=TIMEOUT,
+                    verify=False,
+                    allow_redirects=True
+                )
                 response.raise_for_status()
                 return BeautifulSoup(response.text, 'lxml')
 
