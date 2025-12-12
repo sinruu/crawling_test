@@ -337,9 +337,68 @@ class FactBookCrawler:
         logger.info(f"총 {len(items)}개 항목 수집 완료")
         return items
 
+    def _get_total_pages(self, soup: BeautifulSoup) -> int:
+        """
+        페이지네이션 정보에서 전체 페이지 수 추출
+
+        Args:
+            soup: BeautifulSoup 객체
+
+        Returns:
+            전체 페이지 수
+        """
+        try:
+            paging_div = soup.find('div', class_='paging')
+            if not paging_div:
+                logger.debug("페이지네이션 요소를 찾을 수 없음")
+                return 1
+
+            # data-page 속성을 가진 모든 링크 찾기
+            page_links = paging_div.find_all('a', attrs={'data-page': True})
+            if not page_links:
+                logger.debug("페이지 링크를 찾을 수 없음")
+                return 1
+
+            # 가장 큰 페이지 번호 찾기
+            max_page = max(int(link.get('data-page', 1)) for link in page_links)
+            logger.info(f"전체 페이지 수: {max_page}")
+            return max_page
+
+        except Exception as e:
+            logger.warning(f"페이지 수 파싱 실패: {str(e)}")
+            return 1
+
+    def _navigate_to_page(self, page_num: int) -> Optional[BeautifulSoup]:
+        """
+        특정 페이지로 이동하여 BeautifulSoup 객체 반환
+
+        Args:
+            page_num: 이동할 페이지 번호
+
+        Returns:
+            BeautifulSoup 객체 또는 None
+        """
+        try:
+            logger.info(f"페이지 {page_num}로 이동 중...")
+
+            # 페이지 번호에 해당하는 링크 찾기 및 클릭
+            page_link = self.driver.find_element(By.CSS_SELECTOR, f'a[data-page="{page_num}"]')
+            page_link.click()
+
+            # 페이지 로딩 대기
+            time.sleep(REQUEST_DELAY * 3)
+
+            # 페이지 소스 파싱
+            page_source = self.driver.page_source
+            return BeautifulSoup(page_source, 'lxml')
+
+        except Exception as e:
+            logger.error(f"페이지 {page_num} 이동 실패: {str(e)}")
+            return None
+
     def crawl(self) -> List[Dict]:
         """
-        Fact Book 페이지를 크롤링하여 데이터 수집
+        Fact Book 페이지를 크롤링하여 데이터 수집 (모든 페이지)
 
         Returns:
             게시글 정보 리스트
@@ -350,16 +409,44 @@ class FactBookCrawler:
             # WebDriver 초기화
             self._setup_driver()
 
-            # 페이지 로드
+            # 첫 번째 페이지 로드
             soup = self._fetch_page(self.url)
             if not soup:
                 logger.error("페이지 로드 실패")
                 return []
 
-            # 항목 파싱
-            items = self._parse_items(soup)
+            # 전체 페이지 수 확인
+            total_pages = self._get_total_pages(soup)
 
-            if not items:
+            # 모든 항목을 저장할 리스트
+            all_items = []
+
+            # 첫 번째 페이지 항목 파싱
+            logger.info(f"페이지 1/{total_pages} 파싱 중...")
+            items = self._parse_items(soup)
+            all_items.extend(items)
+            logger.info(f"페이지 1: {len(items)}개 항목 수집")
+
+            # 2페이지 이상인 경우 나머지 페이지 처리
+            if total_pages > 1:
+                for page_num in range(2, total_pages + 1):
+                    logger.info(f"페이지 {page_num}/{total_pages} 파싱 중...")
+
+                    # 페이지 이동
+                    soup = self._navigate_to_page(page_num)
+                    if not soup:
+                        logger.warning(f"페이지 {page_num} 로드 실패, 건너뜀")
+                        continue
+
+                    # 항목 파싱
+                    items = self._parse_items(soup)
+                    all_items.extend(items)
+                    logger.info(f"페이지 {page_num}: {len(items)}개 항목 수집")
+
+                    # 요청 간 딜레이
+                    time.sleep(REQUEST_DELAY)
+
+            if not all_items:
                 logger.warning("수집된 항목이 없습니다. HTML 구조를 확인해주세요.")
                 logger.info("HTML 구조 디버깅 정보:")
                 logger.info(f"페이지 타이틀: {soup.title.string if soup.title else 'N/A'}")
@@ -368,9 +455,9 @@ class FactBookCrawler:
                 lists = soup.find_all(['ul', 'ol'])
                 logger.info(f"리스트 개수: {len(lists)}")
             else:
-                logger.info(f"{len(items)}개 항목 발견")
+                logger.info(f"총 {len(all_items)}개 항목 수집 완료 ({total_pages}페이지)")
 
-            return items
+            return all_items
 
         finally:
             # WebDriver 종료
