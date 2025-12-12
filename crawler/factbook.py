@@ -208,7 +208,7 @@ class FactBookCrawler:
 
     def _parse_items(self, soup: BeautifulSoup) -> List[Dict]:
         """
-        페이지에서 게시글 정보를 파싱
+        페이지에서 게시글 정보를 파싱 (DIV 리스트 구조)
 
         Args:
             soup: BeautifulSoup 객체
@@ -218,99 +218,70 @@ class FactBookCrawler:
         """
         items = []
 
-        # 모든 테이블을 찾아서 시도
-        tables = soup.find_all('table')
-        logger.debug(f"발견된 테이블 개수: {len(tables)}")
+        # DIV 리스트 구조 찾기
+        list_containers = soup.find_all('div', class_='list-tyle1')
+        logger.debug(f"발견된 리스트 컨테이너 개수: {len(list_containers)}")
 
-        for table_idx, table in enumerate(tables):
-            logger.debug(f"테이블 {table_idx + 1} 파싱 시도")
+        for container_idx, container in enumerate(list_containers):
+            logger.debug(f"컨테이너 {container_idx + 1} 파싱 시도")
 
-            # tbody가 있으면 tbody에서, 없으면 table에서 직접 tr 찾기
-            tbody = table.find('tbody')
-            rows = tbody.find_all('tr') if tbody else table.find_all('tr')
+            # 각 list 아이템 찾기
+            list_items = container.find_all('div', class_='list')
+            logger.debug(f"리스트 항목 개수: {len(list_items)}")
 
-            # 헤더 행 제외 (thead가 있거나 첫 행이 th인 경우)
-            thead = table.find('thead')
-            if thead:
-                data_rows = rows
-            else:
-                # 첫 행이 th를 포함하면 제외
-                if rows and rows[0].find('th'):
-                    data_rows = rows[1:]
-                else:
-                    data_rows = rows
-
-            logger.debug(f"데이터 행 개수: {len(data_rows)}")
-
-            for row_idx, row in enumerate(data_rows):
+            for item_idx, item in enumerate(list_items):
                 try:
-                    cols = row.find_all('td')
-                    if not cols:
+                    # 제목 추출
+                    subj_div = item.find('div', class_='subj')
+                    if not subj_div:
                         continue
 
-                    logger.debug(f"행 {row_idx + 1}: {len(cols)}개 컬럼")
+                    title_link = subj_div.find('a')
+                    if not title_link:
+                        continue
 
-                    # 모든 컬럼에서 링크 찾기
-                    link_tag = None
-                    title_text = None
+                    title = title_link.get_text(strip=True)
+                    logger.debug(f"항목 {item_idx + 1}: {title}")
 
-                    for col in cols:
-                        # a 태그 찾기
-                        a_tag = col.find('a')
-                        if a_tag:
-                            link_tag = a_tag
-                            title_text = a_tag.get_text(strip=True)
+                    # PDF 다운로드 링크 찾기
+                    pdf_url = None
+
+                    # 방법 1: 직접 FileDown.do 링크 찾기 (실적발표 페이지)
+                    download_links = item.find_all('a', class_='btn-download')
+                    for link in download_links:
+                        href = link.get('href', '')
+                        if 'FileDown.do' in href:
+                            pdf_url = href
+                            logger.debug(f"직접 다운로드 링크 발견: {pdf_url}")
                             break
 
-                        # button 또는 다른 요소에서 onclick 찾기
-                        btn = col.find(['button', 'span'], onclick=True)
-                        if btn:
-                            onclick = btn.get('onclick', '')
-                            # onclick에서 URL 추출 시도
-                            import re
-                            url_match = re.search(r"['\"]([^'\"]*\.pdf)['\"]", onclick)
-                            if url_match:
-                                pdf_url = url_match.group(1)
-                                title_text = btn.get_text(strip=True) or col.get_text(strip=True)
-                                # 임시 link_tag 생성
-                                link_tag = type('obj', (object,), {
-                                    'get': lambda self, key, default='': pdf_url if key == 'href' else default,
-                                    'get_text': lambda self, strip=False: title_text
-                                })()
-                                break
-
-                    if not link_tag and not title_text:
-                        continue
-
-                    title = title_text if title_text else ''
-                    pdf_url = link_tag.get('href', '') if hasattr(link_tag, 'get') else ''
+                    # 방법 2: data-atchfileid 사용 (Fact Book 페이지)
+                    if not pdf_url:
+                        file_btn = item.find('a', attrs={'data-atchfileid': True})
+                        if file_btn:
+                            file_id = file_btn.get('data-atchfileid', '')
+                            if file_id:
+                                # 한국 eGov 표준 패턴으로 URL 생성
+                                pdf_url = f"/cmm/fms/FileDown.do?fileId={file_id}&fileSeq=0"
+                                logger.debug(f"파일 ID로 URL 생성: {pdf_url}")
 
                     if not pdf_url:
-                        logger.debug(f"PDF URL을 찾을 수 없음: {title}")
+                        logger.warning(f"PDF 링크를 찾을 수 없음: {title}")
                         continue
 
                     # 상대 URL을 절대 URL로 변환
                     if pdf_url and not pdf_url.startswith('http'):
-                        pdf_url = urljoin(self.url, pdf_url)
+                        pdf_url = urljoin(BASE_URL, pdf_url)
 
-                    # 날짜 추출 (마지막 컬럼 또는 날짜 형식 찾기)
-                    date_str = ''
-                    for col in cols:
-                        col_text = col.get_text(strip=True)
-                        # 날짜 형식 패턴 찾기 (YYYY-MM-DD, YYYY.MM.DD 등)
-                        if re.search(r'\d{4}[-./]\d{1,2}[-./]\d{1,2}', col_text):
-                            date_str = col_text
-                            break
-
-                    if not date_str and cols:
-                        date_str = cols[-1].get_text(strip=True)
-
+                    # 날짜 추출
+                    date_div = item.find('div', class_='date')
+                    date_str = date_div.get_text(strip=True) if date_div else ''
                     date = self._parse_date(date_str) if date_str else ''
 
                     # 파일명 생성
                     filename = self._parse_quarter(title)
 
-                    logger.debug(f"항목 발견: {title[:30]}... -> {pdf_url}")
+                    logger.info(f"✓ 항목 발견: {title} ({date})")
 
                     items.append({
                         'date': date,
@@ -321,14 +292,12 @@ class FactBookCrawler:
                     })
 
                 except Exception as e:
-                    logger.warning(f"행 {row_idx + 1} 파싱 중 오류: {str(e)}")
+                    logger.warning(f"항목 {item_idx + 1} 파싱 중 오류: {str(e)}")
+                    import traceback
+                    logger.debug(traceback.format_exc())
                     continue
 
-            # 첫 번째 테이블에서 항목을 찾았으면 중단
-            if items:
-                logger.info(f"테이블 {table_idx + 1}에서 {len(items)}개 항목 발견")
-                break
-
+        logger.info(f"총 {len(items)}개 항목 수집 완료")
         return items
 
     def crawl(self) -> List[Dict]:
