@@ -207,6 +207,47 @@ class FactBookCrawler:
 
         return None
 
+    def _get_excel_url_from_view(self, view_url: str) -> Optional[str]:
+        """
+        view.do 페이지를 방문하여 Excel 파일 다운로드 URL 추출
+
+        Args:
+            view_url: view.do 페이지 URL
+
+        Returns:
+            Excel 파일 다운로드 URL 또는 None
+        """
+        try:
+            # 상대 URL을 절대 URL로 변환
+            full_url = urljoin(BASE_URL, view_url)
+            logger.debug(f"View 페이지 방문: {full_url}")
+
+            # 페이지 로드
+            self.driver.get(full_url)
+            time.sleep(REQUEST_DELAY * 2)
+
+            # 페이지 소스 파싱
+            soup = BeautifulSoup(self.driver.page_source, 'lxml')
+
+            # Excel 파일 링크 찾기 (.xlsx 파일)
+            links = soup.find_all('a', href=True)
+            for link in links:
+                href = link.get('href', '')
+                text = link.get_text(strip=True)
+
+                # .xlsx 파일이면서 FileDown.do 링크인 경우
+                if '.xlsx' in text.lower() or '.xlsx' in href:
+                    if 'FileDown.do' in href:
+                        logger.debug(f"Excel 파일 발견: {text} -> {href}")
+                        return href
+
+            logger.warning(f"Excel 파일을 찾을 수 없음: {full_url}")
+            return None
+
+        except Exception as e:
+            logger.error(f"View 페이지 파싱 오류: {str(e)}")
+            return None
+
     def _parse_items(self, soup: BeautifulSoup) -> List[Dict]:
         """
         페이지에서 게시글 정보를 파싱 (DIV 리스트 구조)
@@ -242,52 +283,46 @@ class FactBookCrawler:
                         continue
 
                     title = title_link.get_text(strip=True)
+                    view_url = title_link.get('href', '')
                     logger.debug(f"항목 {item_idx + 1}: {title}")
 
-                    # PDF 다운로드 링크 찾기
-                    pdf_url = None
+                    # View 페이지에서 Excel 파일 URL 가져오기
+                    excel_url = None
+                    if view_url:
+                        excel_url = self._get_excel_url_from_view(view_url)
 
-                    # 방법 1: 직접 FileDown.do 링크 찾기 (실적발표 페이지)
-                    download_links = item.find_all('a', class_='btn-download')
-                    for link in download_links:
-                        href = link.get('href', '')
-                        if 'FileDown.do' in href:
-                            pdf_url = href
-                            logger.debug(f"직접 다운로드 링크 발견: {pdf_url}")
-                            break
-
-                    # 방법 2: data-atchfileid 사용 (Fact Book 페이지)
-                    if not pdf_url:
-                        file_btn = item.find('a', attrs={'data-atchfileid': True})
-                        if file_btn:
-                            file_id = file_btn.get('data-atchfileid', '')
-                            if file_id:
-                                # 한국 eGov 표준 패턴으로 URL 생성
-                                pdf_url = f"/cmm/fms/FileDown.do?fileId={file_id}&fileSeq=0"
-                                logger.debug(f"파일 ID로 URL 생성: {pdf_url}")
-
-                    if not pdf_url:
-                        logger.warning(f"PDF 링크를 찾을 수 없음: {title}")
+                    if not excel_url:
+                        logger.warning(f"Excel 파일을 찾을 수 없음: {title}")
                         continue
 
                     # 상대 URL을 절대 URL로 변환
-                    if pdf_url and not pdf_url.startswith('http'):
-                        pdf_url = urljoin(BASE_URL, pdf_url)
+                    if excel_url and not excel_url.startswith('http'):
+                        excel_url = urljoin(BASE_URL, excel_url)
 
                     # 날짜 추출
                     date_div = item.find('div', class_='date')
                     date_str = date_div.get_text(strip=True) if date_div else ''
                     date = self._parse_date(date_str) if date_str else ''
 
-                    # 파일명 생성
-                    filename = self._parse_quarter(title)
+                    # Excel 파일명 추출 (URL에서)
+                    filename = None
+                    if 'saveFileNm=' in excel_url:
+                        # saveFileNm 파라미터에서 파일명 추출
+                        import re
+                        match = re.search(r'saveFileNm=([^&]+)', excel_url)
+                        if match:
+                            filename = match.group(1)
 
-                    logger.info(f"✓ 항목 발견: {title} ({date})")
+                    # 파일명이 없으면 기본 생성
+                    if not filename:
+                        filename = self._parse_quarter(title)
+
+                    logger.info(f"✓ 항목 발견: {title} ({date}) - {filename}")
 
                     items.append({
                         'date': date,
                         'title': title,
-                        'pdf_url': pdf_url,
+                        'pdf_url': excel_url,  # Excel URL을 pdf_url 컬럼에 저장 (하위 호환성)
                         'filename': filename,
                         'collected_at': datetime.now().isoformat()
                     })
