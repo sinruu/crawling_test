@@ -1,5 +1,5 @@
 """
-Fact Book 크롤러 (undetected-chromedriver 기반)
+Fact Book 크롤러 (selenium-stealth 기반)
 """
 import re
 import time
@@ -10,11 +10,15 @@ from datetime import datetime
 from typing import List, Dict, Optional
 from urllib.parse import urljoin
 
-import undetected_chromedriver as uc
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, WebDriverException
+from selenium_stealth import stealth
+from webdriver_manager.chrome import ChromeDriverManager
 
 from config import (
     FACTBOOK_URL, FACTBOOK_CSV, BASE_URL,
@@ -34,10 +38,10 @@ class FactBookCrawler:
 
     def _setup_driver(self):
         """
-        Undetected Chrome WebDriver 설정 및 생성
+        Selenium Chrome WebDriver 설정 및 생성 (stealth 적용)
         """
         try:
-            options = uc.ChromeOptions()
+            options = Options()
 
             # 헤드리스 모드 설정
             if HEADLESS:
@@ -53,19 +57,30 @@ class FactBookCrawler:
             options.add_argument('--ignore-certificate-errors')
             options.add_argument('--allow-insecure-localhost')
 
-            # Undetected ChromeDriver 생성
-            # version_main을 지정하지 않으면 자동으로 최신 버전 사용
-            self.driver = uc.Chrome(
-                options=options,
-                use_subprocess=True,
-                version_main=None  # 자동 버전 감지
-            )
+            # 자동화 감지 방지
+            options.add_argument('--disable-blink-features=AutomationControlled')
+            options.add_experimental_option("excludeSwitches", ["enable-automation"])
+            options.add_experimental_option('useAutomationExtension', False)
+
+            # ChromeDriver 생성 (webdriver-manager로 자동 설치)
+            service = Service(ChromeDriverManager().install())
+            self.driver = webdriver.Chrome(service=service, options=options)
+
+            # Stealth 설정 적용
+            stealth(self.driver,
+                    languages=["ko-KR", "ko", "en-US", "en"],
+                    vendor="Google Inc.",
+                    platform="Win32",
+                    webgl_vendor="Intel Inc.",
+                    renderer="Intel Iris OpenGL Engine",
+                    fix_hairline=True,
+                    )
 
             # 타임아웃 설정
             self.driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
             self.driver.implicitly_wait(IMPLICIT_WAIT)
 
-            logger.info("Undetected Chrome WebDriver 초기화 완료")
+            logger.info("Selenium Chrome WebDriver 초기화 완료 (stealth 적용)")
 
         except Exception as e:
             logger.error(f"WebDriver 초기화 실패: {str(e)}")
