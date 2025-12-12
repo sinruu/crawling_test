@@ -148,12 +148,13 @@ class FactBookCrawler:
         logger.warning(f"날짜 형식 변환 실패: {date_str}")
         return date_str
 
-    def _fetch_page(self, url: str) -> Optional[BeautifulSoup]:
+    def _fetch_page(self, url: str, visit_home_first: bool = True) -> Optional[BeautifulSoup]:
         """
         Selenium을 사용하여 웹페이지를 가져와서 BeautifulSoup 객체로 반환
 
         Args:
             url: 크롤링할 URL
+            visit_home_first: 메인 페이지를 먼저 방문할지 여부
 
         Returns:
             BeautifulSoup 객체 또는 None
@@ -166,6 +167,12 @@ class FactBookCrawler:
                 if attempt > 1:
                     time.sleep(REQUEST_DELAY * attempt)
 
+                # 첫 시도 시 메인 페이지 먼저 방문 (세션 생성)
+                if attempt == 1 and visit_home_first:
+                    logger.info("메인 페이지 먼저 방문 중...")
+                    self.driver.get(BASE_URL)
+                    time.sleep(2)  # 메인 페이지 로딩 대기
+
                 # 페이지 로드
                 self.driver.get(url)
 
@@ -175,7 +182,7 @@ class FactBookCrawler:
                 )
 
                 # 추가 로딩 시간 (동적 콘텐츠를 위해)
-                time.sleep(REQUEST_DELAY * 2)
+                time.sleep(REQUEST_DELAY * 3)
 
                 # 페이지 소스 가져오기
                 page_source = self.driver.page_source
