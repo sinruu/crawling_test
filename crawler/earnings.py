@@ -1,5 +1,5 @@
 """
-실적발표 크롤러 (Selenium 기반)
+실적발표 크롤러 (undetected-chromedriver 기반)
 """
 import re
 import time
@@ -10,14 +10,11 @@ from datetime import datetime
 from typing import List, Dict, Optional
 from urllib.parse import urljoin
 
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
+import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, WebDriverException
-from webdriver_manager.chrome import ChromeDriverManager
 
 from config import (
     EARNINGS_URL, EARNINGS_CSV, BASE_URL,
@@ -37,43 +34,38 @@ class EarningsCrawler:
 
     def _setup_driver(self):
         """
-        Chrome WebDriver 설정 및 생성
+        Undetected Chrome WebDriver 설정 및 생성
         """
         try:
-            chrome_options = Options()
+            options = uc.ChromeOptions()
 
             # 헤드리스 모드 설정
             if HEADLESS:
-                chrome_options.add_argument('--headless=new')
-
-            # 봇 탐지 우회를 위한 옵션들
-            chrome_options.add_argument('--disable-blink-features=AutomationControlled')
-            chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-            chrome_options.add_experimental_option('useAutomationExtension', False)
+                options.add_argument('--headless=new')
 
             # 추가 옵션
-            chrome_options.add_argument('--no-sandbox')
-            chrome_options.add_argument('--disable-dev-shm-usage')
-            chrome_options.add_argument('--disable-gpu')
-            chrome_options.add_argument('--window-size=1920,1080')
-            chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36')
+            options.add_argument('--no-sandbox')
+            options.add_argument('--disable-dev-shm-usage')
+            options.add_argument('--disable-gpu')
+            options.add_argument('--window-size=1920,1080')
 
             # SSL 인증서 오류 무시
-            chrome_options.add_argument('--ignore-certificate-errors')
-            chrome_options.add_argument('--allow-insecure-localhost')
+            options.add_argument('--ignore-certificate-errors')
+            options.add_argument('--allow-insecure-localhost')
 
-            # WebDriver 생성
-            service = Service(ChromeDriverManager().install())
-            self.driver = webdriver.Chrome(service=service, options=chrome_options)
+            # Undetected ChromeDriver 생성
+            # version_main을 지정하지 않으면 자동으로 최신 버전 사용
+            self.driver = uc.Chrome(
+                options=options,
+                use_subprocess=True,
+                version_main=None  # 자동 버전 감지
+            )
 
             # 타임아웃 설정
             self.driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
             self.driver.implicitly_wait(IMPLICIT_WAIT)
 
-            # WebDriver 감지 우회
-            self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-
-            logger.info("Chrome WebDriver 초기화 완료")
+            logger.info("Undetected Chrome WebDriver 초기화 완료")
 
         except Exception as e:
             logger.error(f"WebDriver 초기화 실패: {str(e)}")
