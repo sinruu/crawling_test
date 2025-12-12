@@ -218,38 +218,99 @@ class FactBookCrawler:
         """
         items = []
 
-        # 일반적인 IR 페이지 구조를 가정한 파싱
-        # 예시 1: 테이블 구조
-        table = soup.find('table', {'class': 'board-list'}) or soup.find('table')
-        if table:
-            rows = table.find_all('tr')[1:]  # 헤더 제외
-            for row in rows:
+        # 모든 테이블을 찾아서 시도
+        tables = soup.find_all('table')
+        logger.debug(f"발견된 테이블 개수: {len(tables)}")
+
+        for table_idx, table in enumerate(tables):
+            logger.debug(f"테이블 {table_idx + 1} 파싱 시도")
+
+            # tbody가 있으면 tbody에서, 없으면 table에서 직접 tr 찾기
+            tbody = table.find('tbody')
+            rows = tbody.find_all('tr') if tbody else table.find_all('tr')
+
+            # 헤더 행 제외 (thead가 있거나 첫 행이 th인 경우)
+            thead = table.find('thead')
+            if thead:
+                data_rows = rows
+            else:
+                # 첫 행이 th를 포함하면 제외
+                if rows and rows[0].find('th'):
+                    data_rows = rows[1:]
+                else:
+                    data_rows = rows
+
+            logger.debug(f"데이터 행 개수: {len(data_rows)}")
+
+            for row_idx, row in enumerate(data_rows):
                 try:
                     cols = row.find_all('td')
-                    if len(cols) < 2:
+                    if not cols:
                         continue
 
-                    # 제목과 링크 추출
-                    title_col = cols[1] if len(cols) > 1 else cols[0]
-                    link_tag = title_col.find('a')
+                    logger.debug(f"행 {row_idx + 1}: {len(cols)}개 컬럼")
 
-                    if not link_tag:
+                    # 모든 컬럼에서 링크 찾기
+                    link_tag = None
+                    title_text = None
+
+                    for col in cols:
+                        # a 태그 찾기
+                        a_tag = col.find('a')
+                        if a_tag:
+                            link_tag = a_tag
+                            title_text = a_tag.get_text(strip=True)
+                            break
+
+                        # button 또는 다른 요소에서 onclick 찾기
+                        btn = col.find(['button', 'span'], onclick=True)
+                        if btn:
+                            onclick = btn.get('onclick', '')
+                            # onclick에서 URL 추출 시도
+                            import re
+                            url_match = re.search(r"['\"]([^'\"]*\.pdf)['\"]", onclick)
+                            if url_match:
+                                pdf_url = url_match.group(1)
+                                title_text = btn.get_text(strip=True) or col.get_text(strip=True)
+                                # 임시 link_tag 생성
+                                link_tag = type('obj', (object,), {
+                                    'get': lambda self, key, default='': pdf_url if key == 'href' else default,
+                                    'get_text': lambda self, strip=False: title_text
+                                })()
+                                break
+
+                    if not link_tag and not title_text:
                         continue
 
-                    title = link_tag.get_text(strip=True)
-                    pdf_url = link_tag.get('href', '')
+                    title = title_text if title_text else ''
+                    pdf_url = link_tag.get('href', '') if hasattr(link_tag, 'get') else ''
+
+                    if not pdf_url:
+                        logger.debug(f"PDF URL을 찾을 수 없음: {title}")
+                        continue
 
                     # 상대 URL을 절대 URL로 변환
                     if pdf_url and not pdf_url.startswith('http'):
                         pdf_url = urljoin(self.url, pdf_url)
 
-                    # 날짜 추출
-                    date_col = cols[-1]
-                    date_str = date_col.get_text(strip=True)
-                    date = self._parse_date(date_str)
+                    # 날짜 추출 (마지막 컬럼 또는 날짜 형식 찾기)
+                    date_str = ''
+                    for col in cols:
+                        col_text = col.get_text(strip=True)
+                        # 날짜 형식 패턴 찾기 (YYYY-MM-DD, YYYY.MM.DD 등)
+                        if re.search(r'\d{4}[-./]\d{1,2}[-./]\d{1,2}', col_text):
+                            date_str = col_text
+                            break
+
+                    if not date_str and cols:
+                        date_str = cols[-1].get_text(strip=True)
+
+                    date = self._parse_date(date_str) if date_str else ''
 
                     # 파일명 생성
                     filename = self._parse_quarter(title)
+
+                    logger.debug(f"항목 발견: {title[:30]}... -> {pdf_url}")
 
                     items.append({
                         'date': date,
@@ -260,43 +321,13 @@ class FactBookCrawler:
                     })
 
                 except Exception as e:
-                    logger.warning(f"항목 파싱 중 오류: {str(e)}")
+                    logger.warning(f"행 {row_idx + 1} 파싱 중 오류: {str(e)}")
                     continue
 
-        # 예시 2: 리스트 구조
-        else:
-            items_list = soup.find('ul', {'class': 'list'}) or soup.find('div', {'class': 'list'})
-            if items_list:
-                for item in items_list.find_all('li'):
-                    try:
-                        link = item.find('a')
-                        if not link:
-                            continue
-
-                        title = link.get_text(strip=True)
-                        pdf_url = link.get('href', '')
-
-                        if pdf_url and not pdf_url.startswith('http'):
-                            pdf_url = urljoin(self.url, pdf_url)
-
-                        # 날짜 추출
-                        date_tag = item.find('span', {'class': 'date'}) or item.find('time')
-                        date_str = date_tag.get_text(strip=True) if date_tag else ''
-                        date = self._parse_date(date_str) if date_str else ''
-
-                        filename = self._parse_quarter(title)
-
-                        items.append({
-                            'date': date,
-                            'title': title,
-                            'pdf_url': pdf_url,
-                            'filename': filename,
-                            'collected_at': datetime.now().isoformat()
-                        })
-
-                    except Exception as e:
-                        logger.warning(f"항목 파싱 중 오류: {str(e)}")
-                        continue
+            # 첫 번째 테이블에서 항목을 찾았으면 중단
+            if items:
+                logger.info(f"테이블 {table_idx + 1}에서 {len(items)}개 항목 발견")
+                break
 
         return items
 

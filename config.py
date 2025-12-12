@@ -43,7 +43,7 @@ MAX_RETRIES = 3  # 최대 재시도 횟수
 TIMEOUT = 30  # 요청 타임아웃 (초)
 
 # Selenium 설정
-HEADLESS = False  # 브라우저 창을 띄우지 않음 (False로 설정하면 브라우저 창이 보임)
+HEADLESS = True  # 브라우저 창을 띄우지 않음 (False로 설정하면 브라우저 창이 보임)
 PAGE_LOAD_TIMEOUT = 30  # 페이지 로드 타임아웃 (초)
 IMPLICIT_WAIT = 10  # 암묵적 대기 시간 (초)
 
