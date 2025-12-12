@@ -2,10 +2,13 @@
 PDF 파일 다운로드 유틸리티
 """
 import os
+import ssl
 import time
 import logging
 import requests
 import urllib3
+from requests.adapters import HTTPAdapter
+from urllib3.util.ssl_ import create_urllib3_context
 from typing import Optional
 
 # SSL 인증서 검증 경고 비활성화
@@ -17,6 +20,19 @@ from config import HEADERS, MAX_RETRIES, TIMEOUT, REQUEST_DELAY
 logger = logging.getLogger(__name__)
 
 
+class SSLAdapter(HTTPAdapter):
+    """Legacy SSL renegotiation을 지원하는 커스텀 어댑터"""
+
+    def init_poolmanager(self, *args, **kwargs):
+        ctx = create_urllib3_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        # Legacy server 연결 허용
+        ctx.options |= 0x4  # OP_LEGACY_SERVER_CONNECT
+        kwargs['ssl_context'] = ctx
+        return super().init_poolmanager(*args, **kwargs)
+
+
 class PDFDownloader:
     """PDF 파일 다운로드를 처리하는 클래스"""
 
@@ -26,6 +42,9 @@ class PDFDownloader:
             download_dir: PDF를 저장할 디렉토리 경로
         """
         self.download_dir = download_dir
+        # SSL 어댑터가 적용된 세션 생성
+        self.session = requests.Session()
+        self.session.mount('https://', SSLAdapter())
         self._ensure_directory()
 
     def _ensure_directory(self):
@@ -74,7 +93,7 @@ class PDFDownloader:
 
                 logger.debug(f"다운로드 시도 ({attempt}/{MAX_RETRIES}): {url}")
 
-                response = requests.get(
+                response = self.session.get(
                     url,
                     headers=HEADERS,
                     timeout=TIMEOUT,

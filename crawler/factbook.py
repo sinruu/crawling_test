@@ -2,10 +2,13 @@
 Fact Book 크롤러
 """
 import re
+import ssl
 import logging
 import pandas as pd
 import requests
 import urllib3
+from requests.adapters import HTTPAdapter
+from urllib3.util.ssl_ import create_urllib3_context
 from bs4 import BeautifulSoup
 from datetime import datetime
 from typing import List, Dict, Optional
@@ -22,12 +25,28 @@ from config import (
 logger = logging.getLogger(__name__)
 
 
+class SSLAdapter(HTTPAdapter):
+    """Legacy SSL renegotiation을 지원하는 커스텀 어댑터"""
+
+    def init_poolmanager(self, *args, **kwargs):
+        ctx = create_urllib3_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        # Legacy server 연결 허용
+        ctx.options |= 0x4  # OP_LEGACY_SERVER_CONNECT
+        kwargs['ssl_context'] = ctx
+        return super().init_poolmanager(*args, **kwargs)
+
+
 class FactBookCrawler:
     """Fact Book 크롤러 클래스"""
 
     def __init__(self):
         self.url = FACTBOOK_URL
         self.headers = HEADERS
+        # SSL 어댑터가 적용된 세션 생성
+        self.session = requests.Session()
+        self.session.mount('https://', SSLAdapter())
 
     def _parse_quarter(self, title: str) -> Optional[str]:
         """
@@ -105,7 +124,7 @@ class FactBookCrawler:
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 logger.debug(f"페이지 요청 시도 ({attempt}/{MAX_RETRIES}): {url}")
-                response = requests.get(url, headers=self.headers, timeout=TIMEOUT, verify=False)
+                response = self.session.get(url, headers=self.headers, timeout=TIMEOUT, verify=False)
                 response.raise_for_status()
                 return BeautifulSoup(response.text, 'lxml')
 
